@@ -1,0 +1,115 @@
+FusionBites - Premium Food Delivery Platform
+=============================================
+
+Last Updated: 2026-04-10
+
+# Architecture Overview
+- Frontend: React (Vite), Tailwind CSS v4, Framer Motion for animations.
+- Icons: Lucide-react
+- Backend/DB/Auth: Firebase (Auth + Firestore)
+
+# User Roles Directory
+The application uses numeric roles to manage permissions and capabilities.
+
+  Role 1: Customer (Default)
+    - Browses restaurants and menu items.
+    - Adds items to cart, places orders, applies coupons.
+    - Can apply to become a Restaurant Partner or Delivery Partner from Profile page.
+
+  Role 2: Restaurant Partner (Seller)
+    - Custom dashboard to manage orders (accepts, prepares, marks ready).
+    - Can upload new dishes/products.
+
+  Role 3: Delivery Partner
+    - Dashboard to view ready pick-ups.
+    - Can accept deliveries, mark as picked, on_the_way, delivered.
+
+  Role 4: Superadmin / Admin
+    - Full Admin Control Center.
+    - Approve/reject partner applications.
+    - Suspend/reinstate/promote any user.
+    - View platform stats (users, orders, products).
+
+# Firestore Collection Structure
+  users/{uid}       - fullName, email, role, status, loyaltyPoints, phone, profilePicture, requestedRole, createdAt
+  categories/{id}   - name, createdBy, createdAt
+  restaurants/{id}  - name, ownerId, address, cuisineType, image
+  products/{id}     - name, price, categoryName, image, description, prepTime, restaurantId,
+                      restaurantName, ingredients[], addOns[{name, price}], calories, isVeg, popular,
+                      rating, reviews, createdAt
+  orders/{id}       - userId, userName, items[], status, address, paymentMethod, paymentStatus,
+                      totalAmount, discountApplied, couponCode, deliveryFee, taxes,
+                      restaurantId, driverId, driverName, createdAt, updatedAt
+  coupons/{id}      - code, active, type (percentage|flat), value, maxDiscount, minOrder
+  reviews/{id}      - userId, productId, rating, comment, createdAt
+  vouchers/{id}     - userId, code, isUsed, discount
+
+# Order Status Flow
+  placed → confirmed → preparing → ready → picked → on_the_way → delivered
+
+# Authentication
+  - Email/Password login.
+  - Google Social Login.
+  - Session Isolation: Uses browserSessionPersistence so each tab is independent.
+
+# Status Codes (users.status)
+  0 = Suspended/Banned
+  1 = Active
+  2 = Pending Approval (partner upgrade request)
+
+# IMPORTANT: Firestore Security Rules
+  You MUST update your Firestore rules to allow admin reads.
+  Go to Firebase Console > Firestore > Rules and paste:
+
+  rules_version = '2';
+  service cloud.firestore {
+    match /databases/{database}/documents {
+
+      // Users: own data readable by self, all readable by admin
+      match /users/{userId} {
+        allow read: if request.auth != null &&
+                      (request.auth.uid == userId ||
+                       get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 4);
+        allow write: if request.auth != null && request.auth.uid == userId;
+        allow update: if request.auth != null &&
+                        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 4;
+      }
+
+      // Products: publicly readable, writable by restaurant owners and admins
+      match /products/{productId} {
+        allow read: if true;
+        allow create: if request.auth != null;
+        allow update, delete: if request.auth != null &&
+          (resource.data.restaurantId == request.auth.uid ||
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 4);
+      }
+
+      // Orders: readable/writable by the owner, driver, or admin
+      match /orders/{orderId} {
+        allow read, write: if request.auth != null;
+      }
+
+      // Coupons: publicly readable (to validate in-app)
+      match /coupons/{couponId} {
+        allow read: if true;
+        allow write: if request.auth != null &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 4;
+      }
+
+      // Categories: readable by all, writable by restaurant owners and admins
+      match /categories/{catId} {
+        allow read: if true;
+        allow write: if request.auth != null &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role >= 2;
+      }
+
+      // Reviews and vouchers
+      match /reviews/{id} { allow read, write: if request.auth != null; }
+      match /vouchers/{id} { allow read, write: if request.auth != null; }
+    }
+  }
+
+# Admin Login
+  To make yourself an admin, temporarily set Firestore rules to allow all,
+  find your user document, and manually set role: 4.
+  Then restore proper rules above.
